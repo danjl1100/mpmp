@@ -66,7 +66,7 @@ pub mod spec {
 pub type Error = &'static str;
 
 /// Locomotive for transportation. Tracks the location, fuel, and fuel stashes.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Train {
     spec: TrainSpec,
     //
@@ -204,6 +204,16 @@ impl Train {
             stashes,
         })
     }
+    pub fn update(&self, command: Command) -> Result<Train, Error> {
+        match command {
+            Command::Travel(distance) => {
+                self.travel(distance)
+            }
+            Command::StowFuel(amount) => {
+                self.stow_fuel(amount)
+            }
+        }
+    }
 
     pub fn fuel(&self) -> usize {
         self.fuel
@@ -233,10 +243,11 @@ impl fmt::Display for Train {
         for (location, stashed) in &self.stashes {
             writeln!(
                 f,
-                "{1:0$}^[{2} stash]",
+                "{1:0$}^[{2} stash @{3}]",
                 (*location / STEP) * 2,
                 " ",
-                stashed
+                stashed,
+                location
             )?;
         }
         write!(f, "@ {}, fuel {}", self.location, self.fuel)
@@ -291,7 +302,7 @@ impl SimulationSummary {
 }
 impl fmt::Display for SimulationSummary {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "fuel_used = {}", self.fuel_used())
+        write!(f, "fuel_used = {}, steps = {}", self.fuel_used(), self.commands().len())
     }
 }
 
@@ -317,18 +328,13 @@ pub fn simulate<S: Strategy>(goal: GoalSpec, mut strategy: S) -> Result<Simulati
     for _ in 0..20 {
         println!("{}", state);
         if state.meets_goal(&goal) {
-            return Ok(SimulationSummary::new(goal, state, commands));
+            let summary = SimulationSummary::new(goal, state, commands);
+            return Ok(summary);
         }
-        let command = strategy.decide(&state, &goal);
-        if let Some(command) = command {
-            commands.push(command);
-        }
-        match command {
-            Some(Command::Travel(distance)) => {
-                state = state.travel(distance)?;
-            }
-            Some(Command::StowFuel(amount)) => {
-                state = state.stow_fuel(amount)?;
+        match strategy.decide(&state, &goal) {
+            Some(command) => {
+                commands.push(command);
+                state = state.update(command)?;
             }
             None => {
                 return Err("strategy returned None");

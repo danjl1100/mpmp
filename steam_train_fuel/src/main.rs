@@ -1,6 +1,7 @@
-use steam_train_fuel::{simulate, Command::*, GoalSpec};
+use steam_train_fuel::{simulate, Command::*, GoalSpec, SimulationSummary};
 
-fn main() {
+#[allow(unused)]
+fn test_600() -> SimulationSummary {
     let goal = GoalSpec::new(500, 600);
     let cmds = vec![
         Travel(200),
@@ -9,5 +10,23 @@ fn main() {
         Travel(200),
         Travel(400),
     ];
-    println!("{}", simulate(goal, cmds.iter()).unwrap());
+    simulate(goal, cmds.iter()).unwrap()
+}
+
+#[allow(unused)]
+fn test_800() -> SimulationSummary {
+    let goal = GoalSpec::new(500, 800);
+    let cmds = vec![
+        Travel(200),
+        StowFuel(100),
+        Travel(-200),
+        Travel(200),
+        Travel(400),
+    ];
+    simulate(goal, cmds.iter()).unwrap()
+}
+
+fn main() {
+    let mut result = test_600();
+    println!("{}", result);
 }
