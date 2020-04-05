@@ -214,6 +214,9 @@ impl Train {
     pub fn stowed_at(&self, location: usize) -> Option<usize> {
         self.stashes.get(&location).copied()
     }
+    pub fn meets_goal(&self, goal: &GoalSpec) -> bool {
+        self.location == goal.destination()
+    }
 }
 use std::fmt;
 impl fmt::Display for Train {
@@ -222,9 +225,19 @@ impl fmt::Display for Train {
         for x in (0..).step_by(STEP) {
             let symbol = if x % 100 == 0 { "|" } else { "=" };
             write!(f, "{} ", symbol)?;
-            if x + STEP >= self.location {
+            if x + STEP > self.location {
                 break;
             }
+        }
+        writeln!(f)?;
+        for (location, stashed) in &self.stashes {
+            writeln!(
+                f,
+                "{1:0$}^[{2} stash]",
+                (*location / STEP) * 2,
+                " ",
+                stashed
+            )?;
         }
         write!(f, "@ {}, fuel {}", self.location, self.fuel)
     }
@@ -303,7 +316,7 @@ pub fn simulate<S: Strategy>(goal: GoalSpec, mut strategy: S) -> Result<Simulati
     let mut commands = Vec::new();
     for _ in 0..20 {
         println!("{}", state);
-        if state.location() == goal.destination() {
+        if state.meets_goal(&goal) {
             return Ok(SimulationSummary::new(goal, state, commands));
         }
         let command = strategy.decide(&state, &goal);
