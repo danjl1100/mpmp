@@ -6,29 +6,10 @@ pub use spec::*;
 ///
 /// Types within this module have their private types shielded from mutability.
 pub mod spec {
-    /// Train specifications.
-    #[derive(Copy, Clone, Debug, PartialEq)]
-    pub struct TrainSpec {
-        capacity: usize,
-    }
-    impl TrainSpec {
-        pub fn new(capacity: usize) -> TrainSpec {
-            TrainSpec { capacity }
-        }
-        pub fn capacity(&self) -> usize {
-            self.capacity
-        }
-    }
-    impl From<GoalSpec> for TrainSpec {
-        fn from(goal: GoalSpec) -> Self {
-            goal.train_spec
-        }
-    }
-
     /// Goal specifications.
-    #[derive(Copy, Clone)]
+    #[derive(Copy, Clone, Debug, PartialEq)]
     pub struct GoalSpec {
-        train_spec: TrainSpec,
+        capacity: usize,
         destination: usize,
     }
     impl GoalSpec {
@@ -50,12 +31,12 @@ pub mod spec {
                 );
             }
             GoalSpec {
-                train_spec: TrainSpec::new(capacity),
+                capacity,
                 destination,
             }
         }
         pub fn capacity(&self) -> usize {
-            self.train_spec.capacity()
+            self.capacity
         }
         pub fn destination(&self) -> usize {
             self.destination
@@ -68,7 +49,7 @@ pub type Error = &'static str;
 /// Locomotive for transportation. Tracks the location, fuel, and fuel stashes.
 #[derive(Debug, PartialEq, Clone)]
 pub struct Train {
-    spec: TrainSpec,
+    spec: GoalSpec,
     //
     location: usize,
     fuel: usize,
@@ -79,15 +60,12 @@ impl Train {
     ///
     /// ```
     /// use steam_train_fuel::Train;
-    /// let train = Train::new(500);
+    /// let train = Train::new(500, 9999);
     /// ```
-    pub fn new(capacity: usize) -> Self {
-        Self::from(TrainSpec::new(capacity))
+    pub fn new(capacity: usize, destination: usize) -> Self {
+        Self::from(GoalSpec::new(capacity, destination))
     }
-    pub fn from_goal(goal: GoalSpec) -> Self {
-        Self::from(goal.into())
-    }
-    fn from(spec: TrainSpec) -> Self {
+    fn from(spec: GoalSpec) -> Self {
         Train {
             spec,
             location: 0,
@@ -101,7 +79,7 @@ impl Train {
     /// ```
     /// use steam_train_fuel::Train;
     /// // starting config
-    /// let state0 = Train::new(500);
+    /// let state0 = Train::new(500, 9999);
     /// assert_eq!(state0.fuel(), 500);
     /// assert_eq!(state0.location(), 0);
     ///
@@ -157,7 +135,7 @@ impl Train {
     ///
     /// ```
     /// use steam_train_fuel::Train;
-    /// let state = Train::new(500);
+    /// let state = Train::new(500, 9999);
     /// let state = state.travel(150).unwrap();
     /// assert_eq!(state.fuel(), 500-150);
     /// // stow 50 units of fuel
@@ -176,7 +154,7 @@ impl Train {
     /// assert_eq!(state.stowed_at(150), None);
     ///
     /// // cannot stow at the depot (origin)
-    /// let state = Train::new(500);
+    /// let state = Train::new(500, 9999);
     /// assert_eq!(state.stow_fuel(1), Err("cannot stow fuel at the depot"));
     /// ```
     pub fn stow_fuel(&self, amount: usize) -> Result<Train, Error> {
@@ -206,12 +184,8 @@ impl Train {
     }
     pub fn update(&self, command: Command) -> Result<Train, Error> {
         match command {
-            Command::Travel(distance) => {
-                self.travel(distance)
-            }
-            Command::StowFuel(amount) => {
-                self.stow_fuel(amount)
-            }
+            Command::Travel(distance) => self.travel(distance),
+            Command::StowFuel(amount) => self.stow_fuel(amount),
         }
     }
 
@@ -232,14 +206,26 @@ use std::fmt;
 impl fmt::Display for Train {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         const STEP: usize = 25;
+        let destination = self.spec.destination();
         for x in (0..).step_by(STEP) {
-            let symbol = if x % 100 == 0 { "|" } else { "=" };
-            write!(f, "{} ", symbol)?;
-            if x + STEP > self.location {
+            if x == destination {
+                let end_symbol = if self.location == destination {
+                    "[X]"
+                } else {
+                    "[ ]"
+                };
+                write!(f, "{} ", end_symbol)?;
                 break;
             }
+            let symbol = match x {
+                _ if x >= self.location && x < self.location+STEP => {"X"},
+                _ if x <= self.location && x % 100 == 0 => {"|"},
+                _ if x <= self.location => {"="},
+                _ => {" "},
+            };
+            write!(f, "{} ", symbol)?;
         }
-        writeln!(f)?;
+        writeln!(f, "@ {:3}, fuel {:3}", self.location, self.fuel)?;
         for (location, stashed) in &self.stashes {
             writeln!(
                 f,
@@ -250,7 +236,7 @@ impl fmt::Display for Train {
                 location
             )?;
         }
-        write!(f, "@ {}, fuel {}", self.location, self.fuel)
+        Ok(())
     }
 }
 
@@ -271,21 +257,53 @@ pub trait Strategy {
 pub struct SimulationSummary {
     goal: GoalSpec,
     final_state: Train,
+    result: Result<(), Error>,
     commands: Vec<Command>,
+    states: Option<Vec<Train>>,
 }
 impl SimulationSummary {
-    pub fn new(goal: GoalSpec, final_state: Train, commands: Vec<Command>) -> Self {
+    fn new(
+        goal: GoalSpec,
+        final_state: Train,
+        result: Result<(), Error>,
+        commands: Vec<Command>,
+    ) -> Self {
         Self {
             goal,
             final_state,
+            result,
             commands,
+            states: None,
         }
     }
     pub fn goal(&self) -> &GoalSpec {
         &self.goal
     }
+    pub fn states(&mut self) -> &[Train] {
+        let Self {
+            commands,
+            goal,
+            states,
+            ..
+        } = self;
+        let states_vec = states.get_or_insert_with(|| {
+            let mut states = Vec::with_capacity(commands.len() + 1);
+            let mut state = Train::from(*goal);
+            for command in commands {
+                let new_state = state.update(*command).unwrap();
+                states.push(state);
+                state = new_state;
+            }
+            states.push(state);
+            states
+        });
+        return &states_vec[..];
+    }
     pub fn final_state(&self) -> &Train {
         &self.final_state
+    }
+    pub fn result(&self) -> &Result<(), Error> {
+        &self.result
     }
     pub fn commands(&self) -> &[Command] {
         &self.commands
@@ -302,7 +320,15 @@ impl SimulationSummary {
 }
 impl fmt::Display for SimulationSummary {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "fuel_used = {}, steps = {}", self.fuel_used(), self.commands().len())
+        if let Err(e) = self.result {
+            writeln!(f, "FAILURE @{}:: \"{}\"", self.final_state.location(), e)?;
+        }
+        write!(
+            f,
+            "fuel_used = {}, steps = {}",
+            self.fuel_used(),
+            self.commands().len()
+        )
     }
 }
 
@@ -318,30 +344,48 @@ impl fmt::Display for SimulationSummary {
 ///     Travel(200),
 ///     Travel(400)
 /// ];
-/// let result = simulate(goal, cmds.iter()).unwrap();
+/// let result = simulate(goal, cmds.iter());
+/// assert!(result.result().is_ok());
 /// assert_eq!(result.fuel_used(), 1_000);
 /// assert_eq!(result.commands(), &cmds[..]);
 /// ```
-pub fn simulate<S: Strategy>(goal: GoalSpec, mut strategy: S) -> Result<SimulationSummary, Error> {
-    let mut state = Train::from_goal(goal);
+pub fn simulate<S: Strategy>(goal: GoalSpec, mut strategy: S) -> SimulationSummary {
+    let mut state = Train::from(goal);
     let mut commands = Vec::new();
+    let mut states = Vec::new();
     for _ in 0..20 {
-        println!("{}", state);
+        states.push(state.clone());
         if state.meets_goal(&goal) {
-            let summary = SimulationSummary::new(goal, state, commands);
-            return Ok(summary);
+            let mut summary = SimulationSummary::new(goal, state, Ok(()), commands);
+            assert_eq!(summary.states(), &states[..]);
+            return summary;
         }
         match strategy.decide(&state, &goal) {
             Some(command) => {
                 commands.push(command);
-                state = state.update(command)?;
+                match state.update(command) {
+                    Ok(new_state) => state = new_state,
+                    Err(e) => {
+                        return SimulationSummary::new(goal, state, Err(e), commands);
+                    }
+                };
             }
             None => {
-                return Err("strategy returned None");
+                return SimulationSummary::new(
+                    goal,
+                    state,
+                    Err("strategy returned None"),
+                    commands,
+                );
             }
-        }
+        };
     }
-    Err("simulation max iteration couter reached")
+    SimulationSummary::new(
+        goal,
+        state,
+        Err("simulation max iteration couter reached"),
+        commands,
+    )
 }
 
 impl<'a, T> Strategy for T

@@ -10,7 +10,7 @@ fn test_600() -> SimulationSummary {
         Travel(200),
         Travel(400),
     ];
-    simulate(goal, cmds.iter()).unwrap()
+    simulate(goal, cmds.iter())
 }
 
 #[allow(unused)]
@@ -23,10 +23,13 @@ fn test_800() -> SimulationSummary {
         Travel(200),
         Travel(400),
     ];
-    simulate(goal, cmds.iter()).unwrap()
+    simulate(goal, cmds.iter())
 }
 
 fn main() {
-    let mut result = test_600();
+    let mut result = test_800();
     println!("{}", result);
+    for state in result.states() {
+        println!("{}", state);
+    }
 }
