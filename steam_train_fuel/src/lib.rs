@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, btree_map};
 use std::convert::TryInto;
+use std::cmp::min;
 
 pub use spec::*;
 /// Enforce immutability of the specifications.
@@ -53,7 +54,7 @@ pub struct Train {
     //
     location: usize,
     fuel: usize,
-    stashes: HashMap<usize, usize>,
+    stashes: BTreeMap<usize, usize>,
 }
 impl Train {
     /// Creates a new train starting at the origin with full fuel tank.
@@ -70,7 +71,7 @@ impl Train {
             spec,
             location: 0,
             fuel: spec.capacity(),
-            stashes: HashMap::new(),
+            stashes: BTreeMap::new(),
         }
     }
 
@@ -101,6 +102,22 @@ impl Train {
     /// // travel behind origin is forbidden
     /// assert_eq!(state1.travel(-2), Err("moved beyond depot"));
     /// ```
+    ///
+    /// Verify that tank holds no more than capacity
+    /// ```
+    /// use steam_train_fuel::Train;
+    /// let state = Train::new(500, 9999);
+    /// let state = state.travel(100).unwrap();
+    /// let state = state.stow_fuel(300).unwrap();
+    /// let state = state.travel(-100).unwrap();
+    /// assert_eq!(state.fuel(), 500);
+    /// let state = state.travel(99).unwrap();
+    /// assert_eq!(state.fuel(), 401);
+    /// assert_eq!(state.stowed_at(100), Some(300));
+    /// let state = state.travel(1).unwrap();
+    /// assert_eq!(state.fuel(), 500);
+    /// assert_eq!(state.stowed_at(100), Some(200));
+    /// ```
     pub fn travel(&self, distance: isize) -> Result<Train, Error> {
         let Train {
             spec,
@@ -115,9 +132,16 @@ impl Train {
         let fuel = ((*fuel as isize) - distance.abs())
             .try_into()
             .map_err(|_| "used more fuel than was in the tank")?;
-        let fuel = if let Some(stashed) = self.stowed_at(location) {
-            stashes.remove(&location);
-            fuel + stashed
+        let fuel = if let btree_map::Entry::Occupied(mut stashed) = stashes.entry(location) {
+            let stash_used = min(*stashed.get(), spec.capacity() - fuel);
+            let new_fuel = fuel + stash_used;
+            let new_stashed = stashed.get() - stash_used;
+            if new_stashed > 0 {
+                stashed.insert(new_stashed);
+            } else {
+                stashed.remove();
+            }
+            new_fuel
         } else if location == 0 {
             spec.capacity()
         } else {
@@ -290,9 +314,13 @@ impl SimulationSummary {
             let mut states = Vec::with_capacity(commands.len() + 1);
             let mut state = Train::from(*goal);
             for command in commands {
-                let new_state = state.update(*command).unwrap();
-                states.push(state);
-                state = new_state;
+                match state.update(*command) {
+                    Ok(new_state) => {
+                        states.push(state);
+                        state = new_state;
+                    }
+                    Err(_) => {},
+                }
             }
             states.push(state);
             states
@@ -321,7 +349,7 @@ impl SimulationSummary {
 impl fmt::Display for SimulationSummary {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Err(e) = self.result {
-            writeln!(f, "FAILURE @{}:: \"{}\"", self.final_state.location(), e)?;
+            writeln!(f, "FAILURE @{}:: \"{}\", last command = {:?}", self.final_state.location(), e, self.commands.last().unwrap())?;
         }
         write!(
             f,
@@ -353,7 +381,7 @@ pub fn simulate<S: Strategy>(goal: GoalSpec, mut strategy: S) -> SimulationSumma
     let mut state = Train::from(goal);
     let mut commands = Vec::new();
     let mut states = Vec::new();
-    for _ in 0..20 {
+    for _ in 0..1000 {
         states.push(state.clone());
         if state.meets_goal(&goal) {
             let mut summary = SimulationSummary::new(goal, state, Ok(()), commands);
